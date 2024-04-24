@@ -1,0 +1,671 @@
+## detection of disease in the absence of a gold standard
+
+## load libraries
+library(nimble)
+library(tidyverse)
+library(MCMCvis)
+library(coda)
+library(mcmcplots)
+
+## set test sensitivities and specificities
+## for three different tests and prevalences
+## for different populations
+#psens <- round(runif(6, 0.2, 0.9), 2)
+psens <- c(0.75,0.7,0.9,0.65,0.6)
+#pspec <- round(runif(6, 0.6, 0.9), 2)
+pspec <- c(0.55,0.7,0.65,0.75,0.6)
+pprev <- 0.3
+nbadgers <- 500
+print(psens)
+print(pspec)
+print(pprev)
+
+niter <- 100000
+nburnin <- 24000
+
+#simulate infection status of the badgers
+inf <- rbinom(nbadgers, 1, pprev)
+sum(inf)
+
+#set up empty array of test outcomes
+tests <- array(0, dim = c(nbadgers, length(psens)))
+colnames(tests) <- c("test1", "test2", "test3", "test4", "test5")
+
+#for each badger and each test, simulate test outcome
+for(i in 1:length(inf)){
+  for(j in 1:length(psens)){
+    tests[i, j] <- rbinom(1, 1, ifelse(inf[i] == 1, psens[j], 1-pspec[j]))}}
+
+############manipulate test numbers from here###############
+
+#how many tests?
+###choose number of tests to infer results from
+ntests <- 5
+
+#get table of frequencies
+binop <- 2^seq(0, ntests - 1)
+testbin <- tests[, 1:ntests] %*% binop
+testcounts <- tabulate(testbin + 1, nbins = 2^ntests)
+testcounts
+
+#create omega matrix of binary sequence
+omega <- expand.grid(replicate(ntests, c(0, 1), simplify = FALSE))
+omega <- as.matrix(omega)
+omega <- t(omega)
+
+## Define parameters you want to report on
+params <- c("pprev", "psens", "pspec")
+
+################################################################################
+
+## Setup Priors
+
+# Define range
+p <- seq(0, 1, length.out = 100)
+
+### estimate beta parameters for priors
+estBetaParams <- function(mu, var) {
+  alpha <- ((1 - mu) / var - 1 / mu) * mu ^ 2
+  beta <- alpha * (1 / mu - 1)
+  return(params = list(alpha = alpha, beta = beta))
+}
+
+## Set priors - Vague ##########################################################
+
+code  <- nimbleCode({
+  
+  for(i in 1:n) {
+    pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
+      (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
+  }
+  Te[1:n] ~ dmulti(pinf[1:n],N)
+  
+  
+  pprev ~ dunif(0,1)
+  
+  for(j in 1:nT) {
+    psens[j] ~ dunif(0, 1)
+    pspec[j] ~ dunif(0, 1)
+  }
+  
+  
+})
+
+consts <- list(n = length(testcounts),
+               nT = ntests, N = sum(testcounts), omega=omega)
+
+data <- list(
+  Te = testcounts)
+
+inits <- list(
+  pprev = runif(1, 0, 1),
+  psens = runif(ntests, 0.5, 1),
+  pspec = runif(ntests, 0.5, 1)
+)
+
+model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+
+cModel <- compileNimble(model)
+
+config <- configureMCMC(model)
+
+rMCMC <- buildMCMC(config)
+
+cMCMC <- compileNimble(rMCMC, project = model)
+
+system.time(runvagueprior <- runMCMC(cMCMC, 
+                                     niter = niter, 
+                                     nburnin = nburnin, 
+                                     nchains = 3, 
+                                     progressBar = TRUE, 
+                                     summary = TRUE, 
+                                     samplesAsCodaMCMC = TRUE, 
+                                     thin = 1))
+
+runvaguepriorsummary <- MCMCsummary(runvagueprior$samples)
+
+saveRDS(runvagueprior, "Peril7_PriorInfo/VaguePrior.rds")
+
+################################################################################
+## Set priors - Weak Good ######################################################
+
+Se.beta <- estBetaParams(psens, 0.05)
+Sp.beta <- estBetaParams(pspec, 0.05)
+Pr.beta <- estBetaParams(pprev, 0.05)
+
+plot(p, dbeta(p, Pr.beta$alpha[1], Pr.beta$beta[1]), type = 'l') #medium sens (0.75)
+abline(v = 0.3, col = "red")
+
+# Prepare the data frame for Beta distribution values
+sens_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Se.beta$alpha[.x], Se.beta$beta[.x]),
+  Sensitivity = paste("Sensitivity", .x),
+  ActualSens = psens[.x]
+))
+
+# Plot
+ggplot(sens_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Sensitivity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Sensitivity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Sensitivities",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Sensitivity"))
+
+## Specificity
+spec_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Sp.beta$alpha[.x], Sp.beta$beta[.x]),
+  Specificity = paste("Specificity", .x),
+  ActualSens = pspec[.x]
+))
+
+# Plot
+ggplot(spec_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Specificity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Specificity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Specificity",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Specificity"))
+
+
+Se.alpha <- Se.beta$alpha
+Se.beta <- Se.beta$beta
+Sp.alpha <- Sp.beta$alpha
+Sp.beta <- Sp.beta$beta
+
+code  <- nimbleCode({
+  
+  for(i in 1:n) {
+    pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
+      (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
+  }
+  Te[1:n] ~ dmulti(pinf[1:n],N)
+  
+  
+  pprev ~ dunif(0, 1)
+  psens[1] ~ dbeta(Se.alpha[1], Se.beta[1])
+  pspec[1] ~ dbeta(Sp.alpha[1], Sp.beta[1])
+  
+  for(j in 2:nT) {
+    psens[j] ~ dunif(0.5, 1)
+    pspec[j] ~ dunif(0.5, 1)
+  }
+  
+  
+})
+
+consts <- list(n = length(testcounts), Se.beta = Se.beta, Sp.beta = Sp.beta,
+               Se.alpha = Se.alpha, Sp.alpha = Sp.alpha, Pr.beta = Pr.beta,
+               nT = ntests, N = sum(testcounts), omega=omega)
+
+data <- list(
+  Te = testcounts)
+
+inits <- list(
+  pprev = runif(1, 0, 1),
+  psens = runif(ntests, 0.5, 1),
+  pspec = runif(ntests, 0.5, 1)
+)
+
+model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+
+cModel <- compileNimble(model)
+
+config <- configureMCMC(model)
+
+rMCMC <- buildMCMC(config)
+
+cMCMC <- compileNimble(rMCMC, project = model)
+
+system.time(runWeakGood <- runMCMC(cMCMC, 
+                                   niter = niter, 
+                                   nburnin = nburnin, 
+                                   nchains = 3, 
+                                   progressBar = TRUE, 
+                                   summary = TRUE, 
+                                   samplesAsCodaMCMC = TRUE, 
+                                   thin = 1))
+
+runWeakGoodsummary<-MCMCsummary(runWeakGood$samples)
+saveRDS(runWeakGood, "Peril7_PriorInfo/WeakGoodPrior.rds")
+
+################################################################################
+## Set priors - Strong Good ####################################################
+
+Se.beta <- estBetaParams(psens, 0.001)
+Sp.beta <- estBetaParams(pspec, 0.001)
+Pr.beta <- estBetaParams(pprev, 0.001)
+
+plot(p, dbeta(p, Pr.beta$alpha[1], Pr.beta$beta[1]), type = 'l') #medium sens (0.75)
+abline(v = 0.3, col = "red")
+
+# Prepare the data frame for Beta distribution values
+sens_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Se.beta$alpha[.x], Se.beta$beta[.x]),
+  Sensitivity = paste("Sensitivity", .x),
+  ActualSens = psens[.x]
+))
+
+# Plot
+ggplot(sens_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Sensitivity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Sensitivity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Sensitivities",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Sensitivity"))
+
+## Specificity
+spec_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Sp.beta$alpha[.x], Sp.beta$beta[.x]),
+  Specificity = paste("Specificity", .x),
+  ActualSens = pspec[.x]
+))
+
+# Plot
+ggplot(spec_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Specificity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Specificity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Specificity",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Specificity"))
+
+
+Se.alpha <- Se.beta$alpha
+Se.beta <- Se.beta$beta
+Sp.alpha <- Sp.beta$alpha
+Sp.beta <- Sp.beta$beta
+
+code  <- nimbleCode({
+  
+  for(i in 1:n) {
+    pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
+      (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
+  }
+  Te[1:n] ~ dmulti(pinf[1:n],N)
+  
+  
+  pprev ~ dunif(0, 1)
+  psens[1] ~ dbeta(Se.alpha[1], Se.beta[1])
+  pspec[1] ~ dbeta(Sp.alpha[1], Sp.beta[1])
+  
+  for(j in 2:nT) {
+    psens[j] ~ dunif(0.5, 1)
+    pspec[j] ~ dunif(0.5, 1)
+  }
+  
+  
+})
+
+consts <- list(n = length(testcounts), Se.beta = Se.beta, Sp.beta = Sp.beta,
+               Se.alpha = Se.alpha, Sp.alpha = Sp.alpha, Pr.beta = Pr.beta,
+               nT = ntests, N = sum(testcounts), omega=omega)
+
+data <- list(
+  Te = testcounts)
+
+inits <- list(
+  pprev = runif(1, 0, 1),
+  psens = runif(ntests, 0.5, 1),
+  pspec = runif(ntests, 0.5, 1)
+)
+
+model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+
+cModel <- compileNimble(model)
+
+config <- configureMCMC(model)
+
+rMCMC <- buildMCMC(config)
+
+cMCMC <- compileNimble(rMCMC, project = model)
+
+system.time(runGoodStrong <- runMCMC(cMCMC, 
+                                     niter = niter, 
+                                     nburnin = nburnin, 
+                                     nchains = 3, 
+                                     progressBar = TRUE, 
+                                     summary = TRUE, 
+                                     samplesAsCodaMCMC = TRUE, 
+                                     thin = 1))
+
+runGoodStrongsummary <- MCMCsummary(runGoodStrong$samples)
+saveRDS(runGoodStrong, "Peril7_PriorInfo/GoodStrongPrior.rds")
+
+################################################################################
+## Set priors - Strong Bad  ####################################################
+
+## Adjust means
+# Adjustment amount
+adjust_amount <- 0.2
+
+# Function to adjust the vector
+adjust_vec <- function(vec, adjust_amount) {
+  sapply(vec, function(x) {
+    # Randomly decide to add or subtract the adjustment amount
+    adjustment <- ifelse(runif(1) > 0.5, adjust_amount, -adjust_amount)
+    
+    # Adjust the value
+    new_value <- x + adjustment
+    
+    # Ensure the new value is within the 0 to 1 range
+    if (new_value >= 1) {
+      new_value <- x - adjust_amount
+    } else if (new_value <= 0) {
+      new_value <- x + adjust_amount
+    }
+    
+    return(new_value)
+  })
+}
+
+# Adjust the means
+psensA <- adjust_vec(psens, adjust_amount)
+pspecA <- adjust_vec(pspec, adjust_amount)
+pprevA <- adjust_vec(pprev, adjust_amount)
+
+Se.beta <- estBetaParams(psensA, 0.001)
+Sp.beta <- estBetaParams(pspecA, 0.001)
+Pr.beta <- estBetaParams(pprevA, 0.001)
+
+plot(p, dbeta(p, Pr.beta$alpha[1], Pr.beta$beta[1]), type = 'l') #medium sens (0.75)
+abline(v = 0.3, col = "red")
+
+# Prepare the data frame for Beta distribution values
+sens_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Se.beta$alpha[.x], Se.beta$beta[.x]),
+  Sensitivity = paste("Sensitivity", .x),
+  ActualSens = psens[.x]
+))
+
+# Plot
+ggplot(sens_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Sensitivity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Sensitivity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Sensitivities",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Sensitivity"))
+
+## Specificity
+spec_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Sp.beta$alpha[.x], Sp.beta$beta[.x]),
+  Specificity = paste("Specificity", .x),
+  ActualSens = pspec[.x]
+))
+
+# Plot
+ggplot(spec_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Specificity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Specificity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Specificity",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Specificity"))
+
+
+Se.alpha <- Se.beta$alpha
+Se.beta <- Se.beta$beta
+Sp.alpha <- Sp.beta$alpha
+Sp.beta <- Sp.beta$beta
+
+code  <- nimbleCode({
+  
+  for(i in 1:n) {
+    pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
+      (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
+  }
+  Te[1:n] ~ dmulti(pinf[1:n],N)
+  
+  
+  pprev ~ dunif(0, 1)
+  psens[1] ~ dbeta(Se.alpha[1], Se.beta[1])
+  pspec[1] ~ dbeta(Sp.alpha[1], Sp.beta[1])
+  
+  for(j in 2:nT) {
+    psens[j] ~ dunif(0.5, 1)
+    pspec[j] ~ dunif(0.5, 1)
+  }
+  
+  
+})
+
+consts <- list(n = length(testcounts), Se.beta = Se.beta, Sp.beta = Sp.beta,
+               Se.alpha = Se.alpha, Sp.alpha = Sp.alpha, Pr.beta = Pr.beta,
+               nT = ntests, N = sum(testcounts), omega=omega)
+
+data <- list(
+  Te = testcounts)
+
+inits <- list(
+  pprev = runif(1, 0, 1),
+  psens = runif(ntests, 0.5, 1),
+  pspec = runif(ntests, 0.5, 1)
+)
+
+model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+
+cModel <- compileNimble(model)
+
+config <- configureMCMC(model)
+
+rMCMC <- buildMCMC(config)
+
+cMCMC <- compileNimble(rMCMC, project = model)
+
+system.time(runBadStrong <- runMCMC(cMCMC, 
+                                    niter = niter, 
+                                    nburnin = nburnin, 
+                                    nchains = 3, 
+                                    progressBar = TRUE, 
+                                    summary = TRUE, 
+                                    samplesAsCodaMCMC = TRUE, 
+                                    thin = 1))
+
+runBadStrongsummary <- MCMCsummary(runBadStrong$samples)
+saveRDS(runBadStrong, "Peril7_PriorInfo/BadStrongPrior.rds")
+
+################################################################################
+## Set priors - Weak Bad  ######################################################
+
+Se.beta <- estBetaParams(psensA, 0.045)
+Sp.beta <- estBetaParams(pspecA, 0.045)
+Pr.beta <- estBetaParams(pprevA, 0.045)
+
+plot(p, dbeta(p, Pr.beta$alpha[1], Pr.beta$beta[1]), type = 'l') #medium sens (0.75)
+abline(v = 0.3, col = "red")
+
+# Prepare the data frame for Beta distribution values
+sens_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Se.beta$alpha[.x], Se.beta$beta[.x]),
+  Sensitivity = paste("Sensitivity", .x),
+  ActualSens = psens[.x]
+))
+
+# Plot
+ggplot(sens_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Sensitivity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Sensitivity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Sensitivities",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Sensitivity"))
+
+## Specificity
+spec_df <- map_df(1:5, ~ data.frame(
+  p = p,
+  BetaValue = dbeta(p, Sp.beta$alpha[.x], Sp.beta$beta[.x]),
+  Specificity = paste("Specificity", .x),
+  ActualSens = pspec[.x]
+))
+
+# Plot
+ggplot(spec_df, aes(x = p, y = BetaValue)) +
+  geom_line(aes(color = Specificity)) + # Line for beta distribution
+  geom_vline(aes(xintercept = ActualSens, color = Specificity), linetype = "dashed") + # Matched vertical lines
+  scale_color_brewer(palette = "Set1") + # Use a color palette
+  labs(title = "Beta Distributions of Specificity",
+       x = "Probability",
+       y = "Density") +
+  theme_minimal() +
+  guides(color = guide_legend(title = "Specificity"))
+
+
+Se.alpha <- Se.beta$alpha
+Se.beta <- Se.beta$beta
+Sp.alpha <- Sp.beta$alpha
+Sp.beta <- Sp.beta$beta
+
+code  <- nimbleCode({
+  
+  for(i in 1:n) {
+    pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
+      (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
+  }
+  Te[1:n] ~ dmulti(pinf[1:n],N)
+  
+  
+  pprev ~ dunif(0, 1)
+  psens[1] ~ dbeta(Se.alpha[1], Se.beta[1])
+  pspec[1] ~ dbeta(Sp.alpha[1], Sp.beta[1])
+  
+  for(j in 2:nT) {
+    psens[j] ~ dunif(0.5, 1)
+    pspec[j] ~ dunif(0.5, 1)
+  }  
+  
+})
+
+consts <- list(n = length(testcounts), Se.beta = Se.beta, Sp.beta = Sp.beta,
+               Se.alpha = Se.alpha, Sp.alpha = Sp.alpha, Pr.beta = Pr.beta,
+               nT = ntests, N = sum(testcounts), omega=omega)
+
+data <- list(
+  Te = testcounts)
+
+inits <- list(
+  pprev = runif(1, 0, 1),
+  psens = runif(ntests, 0.5, 1),
+  pspec = runif(ntests, 0.5, 1)
+)
+
+model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+
+cModel <- compileNimble(model)
+
+config <- configureMCMC(model)
+
+rMCMC <- buildMCMC(config)
+
+cMCMC <- compileNimble(rMCMC, project = model)
+
+system.time(runBadWeak <- runMCMC(cMCMC, 
+                                  niter = niter, 
+                                  nburnin = nburnin, 
+                                  nchains = 3, 
+                                  progressBar = TRUE, 
+                                  summary = TRUE, 
+                                  samplesAsCodaMCMC = TRUE, 
+                                  thin = 1))
+
+runBadWeaksummary <- MCMCsummary(runBadWeak$samples)
+saveRDS(runBadWeak, "Peril7_PriorInfo/BadWeakPrior.rds")
+
+################################################################################
+
+## Load samples
+BadStrongprior <- readRDS("Peril7_PriorInfo/BadStrongPrior.rds")
+GoodStrongprior <- readRDS("Peril7_PriorInfo/GoodStrongPrior.rds")
+BadWeakprior <- readRDS("Peril7_PriorInfo/BadWeakPrior.rds")
+WeakGoodprior <- readRDS("Peril7_PriorInfo/WeakGoodPrior.rds")
+Vagueprior <- readRDS("Peril7_PriorInfo/VaguePrior.rds")
+
+## combine data
+BadStrongprior_samples <- as.matrix(BadStrongprior$samples) %>%
+  as.data.frame() %>%
+  select(1, 2, 7) %>%
+  mutate(Prior = "Strong/Bad") %>%
+  rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
+  pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+
+GoodStrongprior_samples <- as.matrix(GoodStrongprior$samples) %>%
+  as.data.frame() %>%
+  select(1, 2, 7) %>%
+  mutate(Prior = "Strong/Good") %>%
+  rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
+  pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+
+Vagueprior_samples <- as.matrix(Vagueprior$samples) %>%
+  as.data.frame() %>%
+  select(1, 2, 7) %>%
+  mutate(Prior = "Vague") %>%
+  rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
+  pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+
+BadWeakprior_samples <- as.matrix(BadWeakprior$samples) %>%
+  as.data.frame() %>%
+  select(1, 2, 7) %>%
+  mutate(Prior = "Weak/Bad") %>%
+  rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
+  pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+
+WeakGoodprior_samples <- as.matrix(WeakGoodprior$samples) %>%
+  as.data.frame() %>%
+  select(1, 2, 7) %>%
+  mutate(Prior = "Weak/Good") %>%
+  rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
+  pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+
+plot_data <- rbind(BadStrongprior_samples, GoodStrongprior_samples, BadWeakprior_samples, WeakGoodprior_samples, Vagueprior_samples)
+
+# Plotting
+plot3test <- ggplot(plot_data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter)) +
+  geom_violin() +
+  stat_summary(fun = "mean", geom = "point") +
+  labs(x = "Prior Information", y = "Inferred parameter") +
+  facet_grid( ~ Prior) + 
+  geom_hline(aes(yintercept = Truth, colour = Inferred_parameter), linetype = 3) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(size = 15))
+
+plot5test <- ggplot(plot_data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter)) +
+  geom_violin() +
+  stat_summary(fun = "mean", geom = "point") +
+  labs(x = "Prior Information", y = "Inferred parameter", fill = "Inferred parameter", colour = "Inferred parameter") +
+  #facet_grid( ~ Prior) + 
+  facet_grid(~ factor(Prior, levels=c('Strong/Bad', 'Strong/Good', 'Weak/Bad', 'Weak/Good', 'Vague'))) +
+  geom_hline(aes(yintercept = Truth, colour = Inferred_parameter), linetype = 2) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(size = 15))
+
+plot3test + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+plot5test + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
