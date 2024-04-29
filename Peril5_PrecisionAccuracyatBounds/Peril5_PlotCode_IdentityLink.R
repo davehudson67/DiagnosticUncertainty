@@ -75,11 +75,11 @@ for(iter in 1:n_iterations) {
       }
       
       for(k in 1:nT){
-        psens[k] ~ dunif(0.5, 1)
+        psens[k] ~ dunif(0, 1)
         pspec[k] ~ dunif(0.5, 1)
       }
       
-      pprev ~ dunif(0, 1)
+      pprev ~ dunif(0, 0.5)
       
       Te[1:n] ~ dmulti(pinf[1:n], N)
       

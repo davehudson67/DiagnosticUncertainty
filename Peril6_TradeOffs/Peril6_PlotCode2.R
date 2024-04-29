@@ -69,11 +69,11 @@ for(iter in 1:n_iterations) {
       }
       
       for(k in 1:nT){
-        psens[k] ~ dunif(0.5, 1)
-        pspec[k] ~ dunif(0.5, 1)
+        psens[k] ~ dunif(0, 1)
+        pspec[k] ~ dunif(0, 1)
       }
       
-      pprev ~ dunif(0, 1)
+      pprev ~ dunif(0, 0.5)
       
       Te[1:n] ~ dmulti(pinf[1:n], N)
       
@@ -86,8 +86,8 @@ for(iter in 1:n_iterations) {
       Te = testcounts)
     
     inits <- list(
-      pprev = runif(1, 0, 0.6),
-      psens = runif(ntests, 0, 1),
+      pprev = runif(1, 0, 0.5),
+      psens = runif(ntests, 0.5, 1),
       pspec = runif(ntests, 0.5, 1)
     )
     
@@ -161,60 +161,60 @@ for (iter in 1:dim(summaryinference_all)[1]) {
 }
 
 # Create an empty data frame to hold the results
-#plot_dataSD <- data.frame(iteration = integer(),
-                        #true_sens = double(),
-                        #true_spec = double(),
-                        #inferred_sensSD = double(),
-                        #inferred_specSD = double(),
-                        #inferred_prevSD = double())
+plot_dataSD <- data.frame(iteration = integer(),
+                        true_sens = double(),
+                        true_spec = double(),
+                        inferred_sensSD = double(),
+                        inferred_specSD = double(),
+                        inferred_prevSD = double())
 
 # Loop through the 3D arrays to populate the data frame
-#for (iter in 1:dim(summaryinfsd_all)[1]) {
-#  for (q in 1:dim(summaryinfsd_all)[2]) {
-#    true_sens = psensvec[q]
-#    true_spec = pspecvec[q]
-#    
-#    # inferred_sens and posterior_sd are stored
-#    inferred_sensSD = summaryinference_all[iter, q, 2]
-#    inferred_specSD = summaryinference_all[iter, q, 7]
-#    inferred_prevSD = summaryinference_all[iter, q, 1]
-#    
-#    plot_dataSD <- rbind(plot_dataSD, data.frame(iteration = iter, true_sens = true_sens,  true_spec = true_spec,
-#                                             inferred_sensSD = inferred_sensSD, inferred_prevSD = inferred_prevSD,
-#                                             inferred_specSD = inferred_specSD))
-#  }
-#}
+for (iter in 1:dim(summaryinfsd_all)[1]) {
+  for (q in 1:dim(summaryinfsd_all)[2]) {
+    true_sens = psensvec[q]
+    true_spec = pspecvec[q]
+    
+    # inferred_sens and posterior_sd are stored
+    inferred_sensSD = summaryinfsd_all[iter, q, 2]
+    inferred_specSD = summaryinfsd_all[iter, q, 7]
+    inferred_prevSD = summaryinfsd_all[iter, q, 1]
+    
+    plot_dataSD <- rbind(plot_dataSD, data.frame(iteration = iter, true_sens = true_sens,  true_spec = true_spec,
+                                             inferred_sensSD = inferred_sensSD, inferred_prevSD = inferred_prevSD,
+                                             inferred_specSD = inferred_specSD))
+  }
+}
 
 # Plotting inferred SD
-aSD <- plot_data %>%
+aSD <- plot_dataSD %>%
   group_by(true_sens) %>%
-  mutate(Asd = sd(inferred_sens)) %>%
+  mutate(Asd = inferred_sensSD) %>%
   ungroup() %>%
   ggplot(aes(x = true_sens, y = Asd)) +
   geom_point(alpha = 0.2) +
   xlab("") +
-  ylab("Standard deviation") +
+  ylab("Within sample precision") +
   #ggtitle("Inferred vs True Sensitivity Across Iterations") +
   #geom_abline(slope = 1,
   #            intercept = 0,
   #            color="blue") +
   theme_bw() +
   theme(text = element_text(size = 13),
-        axis.title.y = element_text(size = 10))
-  #ylim(0.5, 1)
-
+        axis.title.y = element_text(size = 10)) +
+  ylim(0, 0.1)
+aSD
 # Plotting inferred specificity vs true sensitivity
-bSD <- plot_data %>%
+bSD <- plot_dataSD %>%
   group_by(true_sens) %>%
-  mutate(Asd = sd(inferred_spec)) %>%
+  mutate(Asd = inferred_specSD) %>%
   ungroup() %>%
   ggplot(aes(x = true_sens, y = Asd)) +
   geom_point(alpha = 0.2) +
   xlab("") +
-  ylab("Standard deviation") +
+  ylab("Within sample precision") +
   #ggtitle("Inferred Specificity vs True Sensitivity Across Iterations") +
   #xlim(0, 5) +
-#  ylim(0.5, 1) +
+  ylim(0, 0.1) +
 #  geom_abline(slope = -1,
 #              intercept = 1.5,
 #              color="blue")  +
@@ -223,21 +223,21 @@ bSD <- plot_data %>%
         axis.title.y = element_text(size = 10))
   
 # Plotting inferred specificity vs true sensitivity
-cSD <- plot_data %>%
+cSD <- plot_dataSD %>%
   group_by(true_sens) %>%
-  mutate(Asd = sd(inferred_prev)) %>%
+  mutate(Asd = inferred_prevSD) %>%
   ungroup() %>%
   ggplot(aes(x = true_sens, y = Asd)) +
   geom_point(alpha = 0.2) +
   xlab("") +
-  ylab("Standard deviation") +
+  ylab("Within sample precision") +
   #ggtitle("Inferred vs True Sensitivity Across Iterations") +
 #  geom_hline(yintercept = 0.3,
 #             color="blue") +
   theme_bw() +
   theme(text = element_text(size = 13),
-        axis.title.y = element_text(size = 10))
-#  ylim(0, 0.5)
+        axis.title.y = element_text(size = 10)) +
+  ylim(0, 0.1)
 
 #aSD | bSD | cSD
 
@@ -285,14 +285,15 @@ c <- ggplot(plot_data, aes(x = true_sens, y = inferred_prev)) +
 # Plotting mean inferred - truth
 plot_data1 <- plot_data %>%
   group_by(true_sens) %>%
-  mutate(DiffSens = mean(inferred_sens) - true_sens) %>%
-  mutate(DiffSpec = mean(inferred_spec) - true_spec) %>%
-  mutate(DiffPrev = mean(inferred_prev) - 0.3)
+  mutate(DiffSens = inferred_sens - true_sens) %>%
+  mutate(DiffSpec = inferred_spec - true_spec) %>%
+  mutate(DiffPrev = inferred_prev - 0.3)
 
 a1 <- ggplot(plot_data1, aes(x = true_sens, y = DiffSens)) +
   geom_point(alpha = 0.2) +
   xlab("") +
-  ylab("Inferred - Truth") +
+  ylab("Within sample accuracy") +
+  ylim(-0.5, 0.2) +
   geom_abline(slope = 0,
               intercept = 0,
               color="black") +
@@ -303,10 +304,11 @@ a1 <- ggplot(plot_data1, aes(x = true_sens, y = DiffSens)) +
 b1 <- ggplot(plot_data1, aes(x = true_sens, y = DiffSpec)) +
   geom_point(alpha = 0.2) +
   xlab("") +
-  ylab("Inferred - Truth") +
+  ylab("Within sample accuracy") +
   geom_abline(slope = 0,
               intercept = 0,
               color="black") +
+  ylim(-0.5, 0.2) +
   theme_bw() +
   theme(text = element_text(size = 13),
         axis.title.y = element_text(size = 10))
@@ -315,10 +317,11 @@ b1 <- ggplot(plot_data1, aes(x = true_sens, y = DiffSpec)) +
 c1 <- ggplot(plot_data1, aes(x = true_sens, y = DiffPrev)) +
   geom_point(alpha = 0.2) +
   xlab("") +
-  ylab("Inferred - Truth") +
+  ylab("Within sample accuracy") +
   geom_abline(slope = 0,
               intercept = 0,
               color="black") +
+  ylim(-0.5, 0.2) +
   theme_bw() +
   theme(text = element_text(size = 13),
         axis.title.y = element_text(size = 10))
