@@ -1,0 +1,267 @@
+---
+title: "Peril 1"
+author: "Dave Hudson"
+date: "2024-05-01"
+output:
+html_document:
+df_print: paged
+---
+
+# R Code for Peril 1: Insufficient Tests
+
+#### Load libaries and set wd
+
+```{r setup, message = FALSE}
+library(nimble)
+library(MCMCvis)
+library(tidyverse)
+library(coda)
+
+setwd("~")
+```
+
+#### Setup test parameters
+
+#### Set sensitivities and specificities for five different tests and prevalences for a single population of 1000 individuals and store true values
+
+```{r, message = FALSE}
+psens <- c(0.85, 0.8, 0.7, 0.6, 0.5)
+pspec <- c(0.70, 0.85, 0.75, 0.65, 0.55)
+pprev <- 0.3
+nindiv <- 1000
+true_values <- c(pprev, psens[1], pspec[1])
+true_parameter <- c("Prevalence", "Sensitivity", "Specificity")
+truth <- data.frame(true_parameter, true_values)
+```
+
+#### Simulate infection status of the individuals
+
+```{r, message = FALSE}
+inf <- rbinom(nindiv, 1, pprev)
+```
+
+#### Set up empty array of test outcomes and simulate test outcomes
+
+```{r, message = FALSE}
+tests <- array(0, dim = c(nindiv, length(psens)))
+colnames(tests) <- c("test1", "test2", "test3", "test4", "test5")
+
+for(i in 1:length(inf)){
+  for(j in 1:length(psens)){
+    tests[i, j] <- rbinom(1, 1, ifelse(inf[i] == 1, psens[j], 1-pspec[j]))}}
+```
+
+#### Now we run the analysis using the results from one test, we first create a table of results before fitting a model in NIMBLE and saving the output.
+
+```{r, message = FALSE}
+ntests <- 1
+
+#get table of frequencies
+binop <- 2^seq(0, ntests-1)
+testbin <- tests[, 1:ntests] #%*% binop
+testcounts <- tabulate(testbin + 1, nbins = 2^ntests)
+testcounts
+
+#create omega matrix of binary sequence
+omega <- expand.grid(replicate(ntests, c(0, 1), simplify = FALSE))
+omega <- as.matrix(omega)
+omega <- t(omega)
+
+## Define parameters you want to report on
+params <- c("pprev", "psens", "pspec")
+
+code  <- nimbleCode({
+  
+  for(i in 1:n) {
+    pinf[i] <- pprev * (omega[1, i] * psens + (1 - omega[1, i]) * (1 - psens)) +
+      (1 - pprev) * (omega[1, i] * (1 - pspec) + (1 - omega[1, i]) * (pspec))
+  }
+  
+  Te[1:n] ~ dmulti(pinf[1:n], N)
+  
+  
+  pprev ~ dunif(0, 1)
+  psens ~ dunif(0.5, 1)
+  pspec ~ dunif(0.5, 1)
+  
+})
+
+consts <- list(n = length(testcounts),
+               N = sum(testcounts), omega = omega)
+
+data <- list(
+  Te = testcounts)
+
+inits <- list(
+  pprev = runif(1, 0, 1),
+  psens = runif(1, 0.5, 1),
+  pspec = runif(1, 0.5, 1)
+)
+
+model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+
+cModel <- compileNimble(model)
+
+config <- configureMCMC(model)
+
+rMCMC <- buildMCMC(config)
+
+cMCMC <- compileNimble(rMCMC, project = model)
+
+system.time(run <- runMCMC(cMCMC, 
+                           niter = 80000, 
+                           nburnin = 12000, 
+                           nchains = 3, 
+                           progressBar = TRUE, 
+                           summary = TRUE, 
+                           samplesAsCodaMCMC = TRUE, 
+                           thin = 1))
+
+saveRDS(run, file = "run1.rds")
+
+```
+
+#### Having completed the analysis for 1 test we now repeat the next block of code for 2-5 tests, each time we save the output ready for plotting.
+
+```{r, message = FALSE, results='hide'}
+
+for (ntests in 2:5) {
+  # Get table of frequencies
+  binop <- 2^seq(0, ntests-1)
+  testbin <- tests[, 1:ntests] %*% binop
+  testcounts <- tabulate(testbin + 1, nbins = 2^ntests)
+
+  # Create omega matrix of binary sequence
+  omega <- expand.grid(replicate(ntests, c(0, 1), simplify = FALSE))
+  omega <- as.matrix(omega)
+  omega <- t(omega)
+
+  # Define parameters you want to report on
+  params <- c("pprev", "psens", "pspec")
+
+  # Nimble code for the model
+  code <- nimbleCode({
+    for(i in 1:n) {
+      pinf[i] <- pprev * prod(omega[1:nT, i] * psens[1:nT] + (1 - omega[1:nT, i]) * (1 - psens[1:nT])) +
+        (1 - pprev) * prod(omega[1:nT, i] * (1 - pspec[1:nT]) + (1 - omega[1:nT, i]) * (pspec[1:nT]))
+    }
+    Te[1:n] ~ dmulti(pinf[1:n], N)
+    pprev ~ dunif(0, 1)
+    for(j in 1:nT) {
+      psens[j] ~ dunif(0.5, 1)
+      pspec[j] ~ dunif(0.5, 1)
+    }
+  })
+
+  # Constants and data for the model
+  consts <- list(n = length(testcounts), nT = ntests, N = sum(testcounts), omega = omega)
+  data <- list(Te = testcounts)
+  inits <- list(pprev = runif(1, 0, 1), psens = runif(ntests, 0.5, 1), pspec = runif(ntests, 0.5, 1))
+
+  # Building and compiling the model
+  model <- nimbleModel(code, constants = consts, data = data, inits = inits)
+  cModel <- compileNimble(model)
+  config <- configureMCMC(model)
+  rMCMC <- buildMCMC(config)
+  cMCMC <- compileNimble(rMCMC, project = model)
+
+  # Running MCMC
+  system.time(run <- runMCMC(cMCMC, 
+                             niter = 80000, 
+                             nburnin = 12000, 
+                             nchains = 3, 
+                             progressBar = TRUE, 
+                             summary = TRUE, 
+                             samplesAsCodaMCMC = TRUE, 
+                             thin = 1))
+
+  # Save the run with a dynamic filename
+  saveRDS(run, file = paste0("run", ntests, ".rds"))
+}
+```
+
+#### Now load the results from all runs into the local environment
+
+```{r, message = FALSE}
+
+run1 <- readRDS("run1.rds")
+run2 <- readRDS("run2.rds")
+run3 <- readRDS("run3.rds")
+run4 <- readRDS("run4.rds")
+run5 <- readRDS("run5.rds")
+```
+
+
+#### We now process the results getting ready to plot
+
+```{r, message = FALSE}
+
+## Do run1 first
+r1_sum <- run1$summary
+r1_sum <- as.matrix(r1_sum$all.chains[, 1])
+r1_samp <- as.matrix(run1$samples)
+
+r1_samp <- r1_samp %>%
+  as.data.frame() %>%
+  pivot_longer(cols = c(pprev, psens, pspec),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
+  mutate(NumberOfTests = 1) %>%
+  mutate(Truth = rep(c(0.3, 0.85, 0.7), times = 612000/3)) %>%
+  mutate(Mean = rep(c(r1_sum[1], r1_sum[2], r1_sum[3]), times = 612000/3))
+
+## Now for runs 2-5
+runs <- list(run2, run3, run4, run5)
+
+# Initialize an empty list to store the processed data frames
+data_frames <- list()
+
+# Loop over each run
+for (i in 1:length(runs)) {
+  # Get summary and samples
+  run_sum <- runs[[i]]$summary
+  run_sum <- as.matrix(run_sum$all.chains[, 1])
+  run_samp <- as.matrix(runs[[i]]$samples)
+  
+  # Convert to data frame and reshape
+  run_samp <- run_samp %>%
+    as.data.frame() %>%
+    rename(pprev = 1, psens = 2, psens2 = 3, pspec = 4, pspec2 = 5) %>%
+    pivot_longer(cols = c(pprev, psens, pspec), names_to = "Inferred_parameter", values_to = "Estimate") %>%
+    mutate(NumberOfTests = i + 1,
+           Truth = rep(c(0.3, 0.85, 0.7), times = 612000 / 3),
+           Mean = rep(run_sum[1:3], times = 612000 / 3))
+  
+  # Store in list
+  data_frames[[i]] <- run_samp
+}
+
+# Combine all data frames into one
+data <- bind_rows(r1_samp, data_frames) %>%
+  select(1:5)
+```
+
+#### We can now do a bit of tidying and create the plot
+
+```{r, message = FALSE}
+
+data$NumberOfTests <- as.factor(data$NumberOfTests)
+data <- data %>%
+  mutate(Inferred_parameter = c(rep(c("Prevalence", "Sensitivity", "Specificity"), times = 3060000/3)))
+                                
+
+ggplot(data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter)) +
+  geom_violin(position = "dodge") +
+  geom_hline(aes(yintercept = Truth, colour = Inferred_parameter), linetype = 2) +
+  stat_summary(fun = "mean", geom = "point") +
+  facet_grid(~ NumberOfTests) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(size = 15)) +
+  labs(x = "Number of Tests", fill = "Inferred parameter", colour = "Inferred parameter")
+
+```
+
+
+
+
+
+
+

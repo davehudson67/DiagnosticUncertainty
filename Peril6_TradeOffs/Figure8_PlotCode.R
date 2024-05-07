@@ -17,40 +17,40 @@ true_values <- c(pprev, psens[1], pspec[1])
 true_parameter <- c("Prevalence", "Sensitivity", "Specificity")
 truth <- data.frame(true_parameter, true_values)  
 
+#simulate infection status of the badgers
+inf <- rbinom(nbadgers, 1, pprev)
+
+#set up empty array of test outcomes
+tests <- array(0, dim = c(nbadgers, length(psens)))
+colnames(tests) <- c("test1", "test2", "test3", "test4", "test5")
+
+#for each badger and each test, simulate test outcome
+for(i in 1:length(inf)){
+  for(j in 1:length(psens)){
+    tests[i, j] <- rbinom(1, 1, ifelse(inf[i] == 1, psens[j], 1-pspec[j]))}}
+
+############manipulate test numbers from here###############
+
+#how many tests?
+###choose number of tests to infer results from
+ntests <- 3
+
+#get table of frequencies
+binop <- 2^seq(0, ntests-1)
+testbin <- tests[, 1:ntests] %*% binop
+testcounts <- tabulate(testbin + 1, nbins = 2^ntests)
+testcounts
+
+#create omega matrix of binary sequence
+omega <- expand.grid(replicate(ntests, c(0, 1), simplify = FALSE))
+omega <- as.matrix(omega)
+omega <- t(omega)
+
 ################################################################################
 
 summaries <- list()
 
 for (k in 1:n_simulations){
-  
-  #simulate infection status of the badgers
-  inf <- rbinom(nbadgers, 1, pprev)
-  
-  #set up empty array of test outcomes
-  tests <- array(0, dim = c(nbadgers, length(psens)))
-  colnames(tests) <- c("test1", "test2", "test3", "test4", "test5")
-  
-  #for each badger and each test, simulate test outcome
-  for(i in 1:length(inf)){
-    for(j in 1:length(psens)){
-      tests[i, j] <- rbinom(1, 1, ifelse(inf[i] == 1, psens[j], 1-pspec[j]))}}
-  
-  ############manipulate test numbers from here###############
-  
-  #how many tests?
-  ###choose number of tests to infer results from
-  ntests <- 3
-  
-  #get table of frequencies
-  binop <- 2^seq(0, ntests-1)
-  testbin <- tests[, 1:ntests] %*% binop
-  testcounts <- tabulate(testbin + 1, nbins = 2^ntests)
-  testcounts
-  
-  #create omega matrix of binary sequence
-  omega <- expand.grid(replicate(ntests, c(0, 1), simplify = FALSE))
-  omega <- as.matrix(omega)
-  omega <- t(omega)
   
   code  <- nimbleCode({
       

@@ -1,5 +1,17 @@
-## detection of disease in the absence of a gold standard
+---
+title: "Peril 7"
+author: "Dave Hudson"
+date: "2024-05-01"
+output:
+html_document:
+df_print: paged
+---
 
+# R Code for Peril 7: Prior Information
+
+#### Load libaries and wd.
+
+```{r setup, message = FALSE}
 ## load libraries
 library(nimble)
 library(tidyverse)
@@ -7,28 +19,26 @@ library(MCMCvis)
 library(coda)
 library(mcmcplots)
 
-## set test sensitivities and specificities
-## for three different tests and prevalences
-## for different populations
-#psens <- round(runif(6, 0.2, 0.9), 2)
+setwd("~")
+```
+
+#### Setup sensitivity and specificity vectors and prevalence for a population of 250 individuals. Then we create test results.
+
+```{r, message=FALSE}
+
 psens <- c(0.75,0.7,0.9,0.65,0.6)
-#pspec <- round(runif(6, 0.6, 0.9), 2)
 pspec <- c(0.55,0.7,0.65,0.75,0.6)
 pprev <- 0.3
-nbadgers <- 250
-print(psens)
-print(pspec)
-print(pprev)
-
+nindividuals <- 250
 niter <- 100000
-nburnin <- 24000
+nburnin <- 19000
+params <- c("pprev", "psens", "pspec")
 
 #simulate infection status of the badgers
-inf <- rbinom(nbadgers, 1, pprev)
-sum(inf)
+inf <- rbinom(nindividuals, 1, pprev)
 
 #set up empty array of test outcomes
-tests <- array(0, dim = c(nbadgers, length(psens)))
+tests <- array(0, dim = c(nindividuals, length(psens)))
 colnames(tests) <- c("test1", "test2", "test3", "test4", "test5")
 
 #for each badger and each test, simulate test outcome
@@ -36,29 +46,24 @@ for(i in 1:length(inf)){
   for(j in 1:length(psens)){
     tests[i, j] <- rbinom(1, 1, ifelse(inf[i] == 1, psens[j], 1-pspec[j]))}}
 
-############manipulate test numbers from here###############
-
 #how many tests?
-###choose number of tests to infer results from
 ntests <- 5
 
 #get table of frequencies
 binop <- 2^seq(0, ntests - 1)
 testbin <- tests[, 1:ntests] %*% binop
 testcounts <- tabulate(testbin + 1, nbins = 2^ntests)
-testcounts
 
 #create omega matrix of binary sequence
 omega <- expand.grid(replicate(ntests, c(0, 1), simplify = FALSE))
 omega <- as.matrix(omega)
 omega <- t(omega)
 
-## Define parameters you want to report on
-params <- c("pprev", "psens", "pspec")
+```
 
-################################################################################
+#### We then create a function that will create our prior beta distributions for each scenario.
 
-## Setup Priors
+```{r, message = FALSE}
 
 # Define range
 p <- seq(0, 1, length.out = 100)
@@ -70,25 +75,29 @@ estBetaParams <- function(mu, var) {
   return(params = list(alpha = alpha, beta = beta))
 }
 
-## Set priors - Vague ##########################################################
+```
+
+#### We now begin running the scenarios starting with vague priors.
+
+```{r, message = FALSE, results='hide'}
 
 code  <- nimbleCode({
-
-    for(i in 1:n) {
-	pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
-		    (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
-	}
-    Te[1:n] ~ dmulti(pinf[1:n],N)
   
- 
-pprev ~ dunif(0,1)
+  for(i in 1:n) {
+    pinf[i] <- pprev*prod(omega[1:nT,i]*psens[1:nT]+(1-omega[1:nT,i])*(1-psens[1:nT]))+
+      (1-pprev)*prod(omega[1:nT,i]*(1-pspec[1:nT])+(1-omega[1:nT,i])*(pspec[1:nT]))
+  }
+  Te[1:n] ~ dmulti(pinf[1:n],N)
   
-for(j in 1:nT) {
+  
+  pprev ~ dunif(0,1)
+  
+  for(j in 1:nT) {
     psens[j] ~ dunif(0, 1)
     pspec[j] ~ dunif(0, 1)
   }
-
-
+  
+  
 })
 
 consts <- list(n = length(testcounts),
@@ -114,24 +123,29 @@ rMCMC <- buildMCMC(config)
 cMCMC <- compileNimble(rMCMC, project = model)
 
 system.time(runvagueprior <- runMCMC(cMCMC, 
-                           niter = niter, 
-                           nburnin = nburnin, 
-                           nchains = 3, 
-                           progressBar = TRUE, 
-                           summary = TRUE, 
-                           samplesAsCodaMCMC = TRUE, 
-                           thin = 1))
+                                     niter = niter, 
+                                     nburnin = nburnin, 
+                                     nchains = 3, 
+                                     progressBar = TRUE, 
+                                     summary = TRUE, 
+                                     samplesAsCodaMCMC = TRUE, 
+                                     thin = 1))
 
 runvaguepriorsummary <- MCMCsummary(runvagueprior$samples)
 
-saveRDS(runvagueprior, "Peril7_PriorInfo/VaguePrior.rds")
+saveRDS(runvagueprior, "VaguePrior.rds")
 
-################################################################################
+```
+
+#### Now for weak/good; we will also plot the prior distributions.
+
+```{r, message = FALSE, results='hide'}
+
 ## Set priors - Weak Good ######################################################
 
-Se.beta <- estBetaParams(psens, 0.08)
-Sp.beta <- estBetaParams(pspec, 0.08)
-Pr.beta <- estBetaParams(pprev, 0.08)
+Se.beta <- estBetaParams(psens, 0.065)
+Sp.beta <- estBetaParams(pspec, 0.065)
+Pr.beta <- estBetaParams(pprev, 0.065)
 
 plot(p, dbeta(p, Pr.beta$alpha[1], Pr.beta$beta[1]), type = 'l') #medium sens (0.75)
 abline(v = 0.3, col = "red")
@@ -231,11 +245,14 @@ system.time(runWeakGood <- runMCMC(cMCMC,
                            samplesAsCodaMCMC = TRUE, 
                            thin = 1))
 
-runWeakGoodsummary<-MCMCsummary(runWeakGood$samples)
-saveRDS(runWeakGood, "Peril7_PriorInfo/WeakGoodPrior.rds")
 
-################################################################################
-## Set priors - Strong Good ####################################################
+saveRDS(runWeakGood, "WeakGoodPrior.rds")
+
+```
+
+#### And strong/good:
+
+```{r, message=FALSE, results='hide'}
 
 Se.beta <- estBetaParams(psens, 0.005)
 Sp.beta <- estBetaParams(pspec, 0.005)
@@ -339,14 +356,15 @@ system.time(runGoodStrong <- runMCMC(cMCMC,
                            samplesAsCodaMCMC = TRUE, 
                            thin = 1))
 
-runGoodStrongsummary <- MCMCsummary(runGoodStrong$samples)
-saveRDS(runGoodStrong, "Peril7_PriorInfo/GoodStrongPrior.rds")
+saveRDS(runGoodStrong, "GoodStrongPrior.rds")
 
-################################################################################
-## Set priors - Strong Bad  ####################################################
+```
+
+#### And strong/bad:
+
+```{r, message=FALSE, results='hide'}
 
 ## Adjust means
-# Adjustment amount
 adjust_amount <- 0.2
 
 # Function to adjust the vector
@@ -476,11 +494,13 @@ system.time(runBadStrong <- runMCMC(cMCMC,
                                      samplesAsCodaMCMC = TRUE, 
                                      thin = 1))
 
-runBadStrongsummary <- MCMCsummary(runBadStrong$samples)
-saveRDS(runBadStrong, "Peril7_PriorInfo/BadStrongPrior.rds")
+saveRDS(runBadStrong, "BadStrongPrior.rds")
 
-################################################################################
-## Set priors - Weak Bad  ######################################################
+```
+
+#### And finally weak/bad:
+
+```{r, message=FALSE, results='hide'}
 
 Se.beta <- estBetaParams(psensA, 0.045)
 Sp.beta <- estBetaParams(pspecA, 0.045)
@@ -584,17 +604,20 @@ system.time(runBadWeak <- runMCMC(cMCMC,
                                     samplesAsCodaMCMC = TRUE, 
                                     thin = 1))
 
-runBadWeaksummary <- MCMCsummary(runBadWeak$samples)
-saveRDS(runBadWeak, "Peril7_PriorInfo/BadWeakPrior.rds")
+saveRDS(runBadWeak, "BadWeakPrior.rds")
 
-################################################################################
+```
+
+#### We then load the outputs and combine the data ready for plotting.
+
+```{r, message=FALSE}
 
 ## Load samples
-BadStrongprior <- readRDS("Peril7_PriorInfo/BadStrongPrior.rds")
-GoodStrongprior <- readRDS("Peril7_PriorInfo/GoodStrongPrior.rds")
-BadWeakprior <- readRDS("Peril7_PriorInfo/BadWeakPrior.rds")
-WeakGoodprior <- readRDS("Peril7_PriorInfo/WeakGoodPrior.rds")
-Vagueprior <- readRDS("Peril7_PriorInfo/VaguePrior.rds")
+BadStrongprior <- readRDS("BadStrongPrior.rds")
+GoodStrongprior <- readRDS("GoodStrongPrior.rds")
+BadWeakprior <- readRDS("BadWeakPrior.rds")
+WeakGoodprior <- readRDS("WeakGoodPrior.rds")
+Vagueprior <- readRDS("VaguePrior.rds")
 
 ## combine data
 BadStrongprior_samples <- as.matrix(BadStrongprior$samples) %>%
@@ -603,7 +626,7 @@ BadStrongprior_samples <- as.matrix(BadStrongprior$samples) %>%
   mutate(Prior = "Strong/Bad") %>%
   rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
   pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
-  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 729000/3))
 
 GoodStrongprior_samples <- as.matrix(GoodStrongprior$samples) %>%
   as.data.frame() %>%
@@ -611,7 +634,7 @@ GoodStrongprior_samples <- as.matrix(GoodStrongprior$samples) %>%
   mutate(Prior = "Strong/Good") %>%
   rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
   pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
-  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 729000/3))
 
 Vagueprior_samples <- as.matrix(Vagueprior$samples) %>%
   as.data.frame() %>%
@@ -619,7 +642,7 @@ Vagueprior_samples <- as.matrix(Vagueprior$samples) %>%
   mutate(Prior = "Vague") %>%
   rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
   pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
-  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 729000/3))
 
 BadWeakprior_samples <- as.matrix(BadWeakprior$samples) %>%
   as.data.frame() %>%
@@ -627,7 +650,7 @@ BadWeakprior_samples <- as.matrix(BadWeakprior$samples) %>%
   mutate(Prior = "Weak/Bad") %>%
   rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
   pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
-  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 729000/3))
 
 WeakGoodprior_samples <- as.matrix(WeakGoodprior$samples) %>%
   as.data.frame() %>%
@@ -635,29 +658,27 @@ WeakGoodprior_samples <- as.matrix(WeakGoodprior$samples) %>%
   mutate(Prior = "Weak/Good") %>%
   rename(Prevalence = pprev, Sensitivity = "psens[1]", Specificity = "pspec[1]", Prior = Prior) %>%
   pivot_longer(cols = c(Prevalence, Sensitivity, Specificity),  values_to = "Estimate", names_to = "Inferred_parameter" ) %>%
-  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 684000/3))
+  mutate(Truth = rep(c(0.3, 0.75, 0.55), times = 729000/3))
 
 plot_data <- rbind(BadStrongprior_samples, GoodStrongprior_samples, BadWeakprior_samples, WeakGoodprior_samples, Vagueprior_samples)
 
-# Plotting
-plot3test <- ggplot(plot_data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter)) +
-  geom_violin() +
-  stat_summary(fun = "mean", geom = "point") +
-  labs(x = "Prior Information", y = "Inferred parameter") +
-  facet_grid( ~ Prior) + 
-  geom_hline(aes(yintercept = Truth, colour = Inferred_parameter), linetype = 3) +
-  theme_bw() +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(size = 15))
+```
+
+#### And finally we can plot.
+
+```{r, message=FALSE}
 
 plot5test <- ggplot(plot_data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter)) +
   geom_violin() +
   stat_summary(fun = "mean", geom = "point") +
-  labs(x = "Prior Information", y = "Inferred parameter") +
-  facet_grid( ~ Prior) + 
-  geom_hline(aes(yintercept = Truth, colour = Inferred_parameter), linetype = 3) +
+  labs(x = "Prior Information", y = "Inferred parameter", fill = "Inferred parameter", colour = "Inferred parameter") +
+  #facet_grid( ~ Prior) + 
+  facet_grid(~ factor(Prior, levels=c('Strong/Bad', 'Strong/Good', 'Weak/Bad', 'Weak/Good', 'Vague'))) +
+  geom_hline(aes(yintercept = Truth, colour = Inferred_parameter), linetype = 2) +
   theme_bw() +
   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(size = 15))
 
-plot3test + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-plot5test
+plot5test + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+```
 

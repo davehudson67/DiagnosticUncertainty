@@ -1,32 +1,47 @@
-## detection of disease in the absence of a gold standard
+---
+title: "Peril 2"
+author: "Dave Hudson"
+date: "2024-05-01"
+output:
+html_document:
+df_print: paged
+---
 
-## load libraries
+# R Code for Peril 2: Alternatives to a 3rd test
+
+#### Load libaries and set wd.
+
+```{r setup, message = FALSE}
 library(nimble)
 library(MCMCvis)
 library(tidyverse)
+library(coda)
 
-## set test sensitivities and specificities
-## for three different tests and prevalences
-## for different populations
-#psens <- round(runif(6, 0.2, 0.9), 2)
-psens <- c(0.9, 0.9) #c(0.9,0.8,0.7,0.7,0.7)
-#pspec <- round(runif(6, 0.6, 0.9), 2)
-pspec <- c(0.75, 0.75) #c(0.75,0.65,0.55,0.55,0.55)
+setwd("~")
+```
+
+#### Setup test parameters
+
+#### Set sensitivities and specificities for two different tests and prevalences for two populations of 1000 individuals where the prevalence of the second population changes.
+
+```{r, message = FALSE}
+psens <- c(0.9, 0.9)
+pspec <- c(0.75, 0.75)
 npopns<-2
 
 # Define the range of second prevalence values
 prevalence_values <- seq(0.3, 0.5, by = 0.05)
+```
 
+#### Now we loop over the analysis for each of the different prevalence values for the second population and save the output.
+
+```{r, message = FALSE, results='hide'}
 # Loop through each prevalence value
 for (pprev2 in prevalence_values) {
   pprev <- c(0.3, pprev2)  # First prevalence fixed at 0.3, second varies
   nbadgers <- 1000
   npopns <- length(pprev)  # Update number of populations based on prevalence vector length
-  
-  print(psens)
-  print(pspec)
-  print(pprev)
-  
+
   # Simulate infection status of the badgers
   inf <- array(0, dim = c(nbadgers, npopns))
   for(p in 1:npopns){
@@ -76,8 +91,8 @@ for (pprev2 in prevalence_values) {
       }
       
       for(j in 1:nT) {
-        psens[j] ~ dunif(0.5, 1)
-        pspec[j] ~ dunif(0.5, 1)
+        psens[j] ~ dunif(0, 1)
+        pspec[j] ~ dunif(0, 1)
       }
       
       
@@ -115,16 +130,28 @@ for (pprev2 in prevalence_values) {
                                thin = 1))
     
     # Save the run
-    save_filename <- sprintf("Peril2_Alternativesto3rd/run_%03d.rds", round(pprev2 * 100))
+    save_filename <- sprintf("run_%03d.rds", round(pprev2 * 100))
     saveRDS(run, save_filename)
   }
 }
 
-r50 <- readRDS("Peril2_Alternativesto3rd/run_050.rds")
-r45 <- readRDS("Peril2_Alternativesto3rd/run_045.rds")
-r40 <- readRDS("Peril2_Alternativesto3rd/run_040.rds")
-r35 <- readRDS("Peril2_Alternativesto3rd/run_035.rds")
-r30 <- readRDS("Peril2_Alternativesto3rd/run_030.rds")
+```
+
+#### Now load the results from all runs into the local environment
+
+```{r, message = FALSE}
+
+r50 <- readRDS("run_050.rds")
+r45 <- readRDS("run_045.rds")
+r40 <- readRDS("run_040.rds")
+r35 <- readRDS("run_035.rds")
+r30 <- readRDS("run_030.rds")
+```
+
+
+#### We now process the results getting ready to plot
+
+```{r, message = FALSE}
 
 # List of run objects and their respective second prevalence values
 runs <- list(r50 = 0.5, r45 = 0.45, r40 = 0.4, r35 = 0.35, r30 = 0.3)
@@ -155,11 +182,11 @@ for (run in names(runs)) {
 # Combine all data frames into one final data frame
 data <- bind_rows(data_frames)
 
-# Combine all data frames into one
-data <- bind_rows(data_frames)
+```
 
-saveRDS(data, "Peril2_Alternativesto3rd/plotdata.rds")
-data <- readRDS("Peril2_Alternativesto3rd/plotdata.rds")
+#### We can now do a bit of tidying and create the plot
+
+```{r, message = FALSE}
 
 ggplot(data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter)) +
   geom_violin(position = "dodge") +
@@ -169,6 +196,8 @@ ggplot(data, aes(x = Inferred_parameter, y = Estimate, fill = Inferred_parameter
   theme_bw() +
   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(size = 15)) +
   labs(x = "Prevalence Population B", fill = "Inferred parameter", colour = "Inferred parameter")
+
+```
 
 
 
